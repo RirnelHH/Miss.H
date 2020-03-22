@@ -4,18 +4,20 @@ import numpy as np
 import gym
 from tqdm import tqdm
 import os
+from . import model as md
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 class Agent(object):
-    def __init__(self, policy_path, sample_space):
-        self.agent = torch.load(policy_path)
+    def __init__(self, policy_path, sample_space,num_inp,embedding_dims):
+        self.agent = md.GaussianPolicy(num_inp,sample_space.shape[0],embedding_dims,sample_space)
+        self.agent.load_state_dict(torch.load(policy_path))
         self.sample_space = sample_space
         self.m_name = os.path.splitext(os.path.split(policy_path)[1])[0]
 
 
-    def action(self,state):
-        _,_,action = self.agent.select_action(state, evaluate=True)
+    def select_action(self,state):
+        _,_,action = self.agent.sample(state)
         action = action.detach().numpy()
         return action
 
@@ -24,7 +26,7 @@ class RandomAgent(object):
         self.action_space = action_space
         self.m_name = "Random Agent"
 
-    def action(self,state):
+    def select_action(self,state):
         return self.action_space.sample()
 
 """
@@ -107,6 +109,7 @@ class IRL_function(nn.Module):
         f_x = self.fc2(f_x)
         f_x = self.relu2(f_x)
         r_x = self.fc3(f_x)
+        print("yes")
 
         return r_x
 
@@ -126,18 +129,16 @@ class Model(nn.Module):
 
     def train(self, dataset, epoch = 10,debug=True):
         for i in tqdm(range(epoch)):
-            #D = dataset.batch(batch_size = self.batch_size, include_action = True)
-            D = dataset.__getitem__(1)
+            D = dataset.batch(batch_size = self.batch_size)
             loss = torch.FloatTensor()
             for d in D:
                 r_x = torch.sum(self.reward_function(d[0]),axis = 0)
                 r_y = torch.sum(self.reward_function(d[1]),axis = 0)
                 logits = torch.cat([r_x,r_y],axis = 0).unsqueeze(axis=0)
                 #lable = torch.FloatTensor([1.,0.] if d[-1] == 1 else [0.,1.])
-                
                 lable = torch.tensor([d[-1]],dtype=torch.int64)
-                T_loss = torch.nn.functional.cross_entropy(logits,lable)
-                loss = torch.cat([loss,torch.nn.functional.cross_entropy(logits,lable).unsqueeze(0)],axis =0)
+                #T_loss = torch.nn.functional.cross_entropy(logits,lable)
+                T_loss = torch.cat([loss,torch.nn.functional.cross_entropy(logits,lable).unsqueeze(0)],axis =0)
 
             T_label = 0
             if d[-1] == 1:
@@ -146,7 +147,8 @@ class Model(nn.Module):
             else:
                 if r_x < r_y:
                     T_label += 1
-            loss = torch.mean(loss)
+            loss = torch.mean((-1)*T_loss)
+            print(f"epoch is : {i} , loss is {loss.item()}, logits is {logits}, lable is {lable}, T_loss :{T_loss.item()}")
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
@@ -173,6 +175,7 @@ class Dataset(torch.utils.data.Dataset):
             self.memory.append([])
         self.position = np.zeros(number_agent,dtype=np.int64)
         self.min_gap = min_gap
+        self.batch_size = 64
 
     def gen_traj(self,agent,min_length):
         if agent is None:
@@ -181,7 +184,7 @@ class Dataset(torch.utils.data.Dataset):
         obs, actions,rewards = [self.env.reset()],[],[]
         step = 0
         while True:
-            action = agent.action(obs[-1])
+            action = agent.select_action(obs[-1])
             state,reward,done,_ = self.env.step(action)
             obs.append(state)
             rewards.append(reward)
@@ -230,18 +233,20 @@ class Dataset(torch.utils.data.Dataset):
                     self.memory[step].append(temp)
             step += 1
 
-    def __getitem__(self,i):
+    def sample(self):
         agent_index = np.random.choice(self.number_agent,2)
         data_index = np.random.choice(self.capital,2)
-        data_index %= self.position
+        data_index %= self.position[agent_index]
+        ### data_index 
         if self.min_gap is not None:
             while np.abs(np.sum(self.memory[agent_index[0]][data_index[0]][-1]) - np.sum(self.memory[agent_index[1]][data_index[1]][-1])) < self.min_gap:
                 agent_index = np.random.choice(self.number_agent,2)
                 data_index = np.random.choice(self.capital,2)
                 data_index %= self.position
 
-        x = self.memory[agent_index[0]][data_index[0]]
-        y = self.memory[agent_index[1]][data_index[1]]    
+        x = self.memory[agent_index[:,0]][data_index[:,0]]
+        y = self.memory[agent_index[:,1]][data_index[:,1]] 
+            
 
         if self.step is None or self.ranked_mode is "GT_No_step":
             r_x = np.sum(x[-1])
@@ -262,17 +267,23 @@ class Dataset(torch.utils.data.Dataset):
                     np.concatenate([y[0],y[1]],axis = 1)[time_y:time_y+step],
                     0 if r_x > r_y else 1
             )
-        return [data]
+        return agent_index,data_index,[data]
 
+    def batch(self,batch_size:int):
+        batch_data = []
+        for i in range(batch_size):
+            _,_,data = self.sample()
+            batch_data.append(data)
+        return batch_data
 
     def __len__(self):
         return len(self.memory)
-
-env = gym.make("Humanoid-v2")
-dataset = Dataset(env)
-agent = RandomAgent(env.action_space)
-agent1 = RandomAgent(env.action_space)
-dataset.push([agent,agent1])
-dataset.__getitem__(1)
-model = Model(include_action = True,batch_size = 1,ob_dim = env.observation_space.shape[0],action_dim = env.action_space.shape[0])
-model.train(dataset)
+if __name__ == "__main__":
+    env = gym.make("Humanoid-v2")
+    dataset = Dataset(env)
+    agent = RandomAgent(env.action_space)
+    agent1 = RandomAgent(env.action_space)
+    dataset.push([agent,agent1])
+    dataset.__getitem__(1)
+    model = Model(include_action = True,batch_size = 1,ob_dim = env.observation_space.shape[0],action_dim = env.action_space.shape[0])
+    model.train(dataset)
