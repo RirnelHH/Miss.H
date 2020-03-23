@@ -21,7 +21,7 @@ for i in AgentFile:
     print(Agents[-1].m_name)
 
 Data = Dataset(env,number_agent=len(Agents))
-for i in range(20):
+for i in range(10):
     Data.push(Agents)
 
 model = Model(include_action = True, ob_dim = env.observation_space.shape[0],action_dim = env.action_space.shape[0])

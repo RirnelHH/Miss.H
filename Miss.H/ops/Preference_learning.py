@@ -109,7 +109,6 @@ class IRL_function(nn.Module):
         f_x = self.fc2(f_x)
         f_x = self.relu2(f_x)
         r_x = self.fc3(f_x)
-        print("yes")
 
         return r_x
 
@@ -129,7 +128,7 @@ class Model(nn.Module):
 
     def train(self, dataset, epoch = 10,debug=True):
         for i in tqdm(range(epoch)):
-            D = dataset.batch(batch_size = self.batch_size)
+            D = dataset.batch(batch_size = 5)
             loss = torch.FloatTensor()
             for d in D:
                 r_x = torch.sum(self.reward_function(d[0]),axis = 0)
@@ -244,8 +243,8 @@ class Dataset(torch.utils.data.Dataset):
                 data_index = np.random.choice(self.capital,2)
                 data_index %= self.position
 
-        x = self.memory[agent_index[:,0]][data_index[:,0]]
-        y = self.memory[agent_index[:,1]][data_index[:,1]] 
+        x = self.memory[agent_index[0]][data_index[0]]
+        y = self.memory[agent_index[1]][data_index[1]] 
             
 
         if self.step is None or self.ranked_mode is "GT_No_step":
@@ -267,7 +266,7 @@ class Dataset(torch.utils.data.Dataset):
                     np.concatenate([y[0],y[1]],axis = 1)[time_y:time_y+step],
                     0 if r_x > r_y else 1
             )
-        return agent_index,data_index,[data]
+        return agent_index,data_index,data
 
     def batch(self,batch_size:int):
         batch_data = []
